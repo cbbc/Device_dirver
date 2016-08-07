@@ -1,0 +1,1 @@
+cmd_/home/buddy/buddy_tmp/project/device/misc/tank/tank.ko := ld -r -m elf_i386 -T /usr/src/linux-headers-3.13.0-46-generic/scripts/module-common.lds --build-id  -o /home/buddy/buddy_tmp/project/device/misc/tank/tank.ko /home/buddy/buddy_tmp/project/device/misc/tank/tank.o /home/buddy/buddy_tmp/project/device/misc/tank/tank.mod.o

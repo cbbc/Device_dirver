@@ -1,0 +1,245 @@
+/*
+ * Copyright (C) 2008 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include <fcntl.h>
+#include <errno.h>
+#include <math.h>
+#include <poll.h>
+#include <unistd.h>
+#include <dirent.h>
+#include <sys/select.h>
+#include <cutils/log.h>
+#include <linux/kxtf9.h>
+  
+#include "AccSensor.h"
+#define ACC_UNIT_CONVERSION(value) ((value) * GRAVITY_EARTH / (1024.0f))
+#define ACC_INPUT_NAME  "accelerometer"
+#define GMA_UNIT_CONVERSION(value)		((value) *(GRAVITY_EARTH / (1024.0f)))//(1004544.0f)))  //(1024)*981 becomes 1g = 1004544
+#define ACC_DEV_PATH_NAME    "/dev/lsm303"
+#define LOG_TAG "Sensors"
+
+int write_sys_attribute(const char *path, const char *value, int bytes)
+{
+    int ifd, amt;
+
+	ifd = open(path, O_WRONLY);
+    if (ifd < 0) {
+        ALOGE("Write_attr failed to open %s (%s)",path, strerror(errno));
+        return -1;
+	}
+	ALOGE("BuddyHALGSensor open\n");
+    amt = write(ifd, value, bytes);
+	amt = ((amt == -1) ? -errno : 0);
+	ALOGE_IF(amt < 0, "Write_int failed to write %s (%s)",
+		path, strerror(errno));
+    close(ifd);
+	return amt;
+}
+/*****************************************************************************/
+static struct sensor_t sSensorList[] = {
+		{ 
+			"LSM303C 3-axis Accelerometer",
+			"ST",
+			1, 
+			SENSORS_ACCELERATION_HANDLE,
+			SENSOR_TYPE_ACCELEROMETER, 
+			(GRAVITY_EARTH * 16.0f),
+			(GRAVITY_EARTH * 16.0f)/1024.0f, 
+			0.145f, 
+			10000, 0,0,
+			{}
+		},
+};
+
+
+
+AccSensor::AccSensor() :
+	SensorBase(ACC_DEV_PATH_NAME, ACC_INPUT_NAME),
+		mEnabled(1),
+		mDelay(10000),
+		//mLayout(1),
+    	mInputReader(32),
+    	mHasPendingEvent(false)
+{
+	ALOGE("BuddyHALGSensor AccSensor\n");
+    mPendingEvent.version = sizeof(sensors_event_t);
+    mPendingEvent.sensor = ID_A;
+    mPendingEvent.type = SENSOR_TYPE_ACCELEROMETER;
+    memset(mPendingEvent.data, 0, sizeof(mPendingEvent.data));
+    
+    if (data_fd >= 0) {
+        strcpy(input_sysfs_path, "/sys/class/input/");
+        strcat(input_sysfs_path, input_name);
+        strcat(input_sysfs_path, "/device/");
+        input_sysfs_path_len = strlen(input_sysfs_path);
+		ALOGD("BuddyHALGmaSensor: sysfs_path=%s", input_sysfs_path);
+    } else {
+		input_sysfs_path[0] = '\0';
+		input_sysfs_path_len = 0;
+	}
+	
+
+	open_device();
+}
+
+AccSensor::~AccSensor()
+{
+	ALOGE("BuddyHALGSensor ~AccSensor\n");
+	if (mEnabled) {
+		setEnable(0, 0);
+	}
+
+	close_device();
+}
+
+int AccSensor::setInitialState()
+{
+	struct input_absinfo absinfo;
+
+	ALOGE("[BuddyHAL]initwlb   setInitialState: --=-=-=-=-=-= ");
+
+	if (mEnabled) {
+		if (!ioctl(data_fd, EVIOCGABS(EVENT_TYPE_ACCEL_X), &absinfo)) {
+			mPendingEvent.acceleration.x = ACC_UNIT_CONVERSION(absinfo.value);
+		}
+		if (!ioctl(data_fd, EVIOCGABS(EVENT_TYPE_ACCEL_Y), &absinfo)) {
+			mPendingEvent.acceleration.y = ACC_UNIT_CONVERSION(absinfo.value);
+		}
+		if (!ioctl(data_fd, EVIOCGABS(EVENT_TYPE_ACCEL_Z), &absinfo)) {
+			mPendingEvent.acceleration.z = ACC_UNIT_CONVERSION(absinfo.value);
+		}
+	}
+	return 0;
+}
+
+bool AccSensor::hasPendingEvents() const
+{
+	ALOGE("BuddyHALGSensor hasPendingEvent\n");
+	return mHasPendingEvent;
+}
+
+int AccSensor::setEnable(int32_t handle, int enabled)
+{
+	int err = 0;
+	char buffer[2]={0,0};
+
+	/* handle check */
+	if (handle != ID_A) {
+		ALOGE("BuddyHALGSensor: setEnable Invalid handle (%d)", handle);
+		return -EINVAL;
+	}
+	buffer[0]= enabled ? '1':'0';
+	ALOGD("BuddyHALGSensor: enabled = %s", buffer);
+	strcpy(&input_sysfs_path[input_sysfs_path_len], "enable");
+	err = write_sys_attribute(input_sysfs_path, buffer, 1);
+	if (err != 0) 
+		return err;
+	
+    return err;
+}
+
+int AccSensor::setDelay(int32_t handle, int64_t delay_ns)
+{
+	int err = 0;
+	int32_t us; 
+	char buffer[16];
+	int bytes;
+	/* handle check */
+	if (handle != ID_A) {
+		ALOGE("BuddyHALGSensor: Invalid handle (%d)", handle);
+		return -EINVAL;
+	}
+	if (mDelay != delay_ns) {
+		us = (int32_t)(delay_ns / 1000000);
+
+    	strcpy(&input_sysfs_path[input_sysfs_path_len], "delay");
+   		bytes = sprintf(buffer, "%d", (int)us);
+		err = write_sys_attribute(input_sysfs_path, buffer, bytes);
+		if (err == 0) {
+			mDelay = delay_ns;
+			ALOGD("BuddyHALGSensor: Control set delay %f ms requetsed, ",
+				delay_ns/1000000.0f);
+		}
+	}
+	return err;
+}
+
+int64_t AccSensor::getDelay(int32_t handle)
+{
+	ALOGE("BuddyHALGSensor getDelay\n");
+    return (handle == ID_A) ? mDelay : 0;
+}
+
+int AccSensor::getEnable(int32_t handle)
+{
+	ALOGE("BuddyHALGSensor getEnable\n");
+    return (handle == ID_A) ? mEnabled : 0;
+}
+
+int AccSensor::readEvents(sensors_event_t * data, int count)
+{
+	ALOGE("BuddyHALGSensor readEvents\n");
+    if (count < 1)
+        return -EINVAL;
+
+    if (mHasPendingEvent) {
+        mHasPendingEvent = false;
+        mPendingEvent.timestamp = getTimestamp();
+        *data = mPendingEvent;
+        return mEnabled ? 1 : 0;
+    }
+
+    ssize_t n = mInputReader.fill(data_fd);
+    if (n < 0)
+        return n;
+
+    int numEventReceived = 0;
+    input_event const* event;
+
+    while (count && mInputReader.readEvent(&event)) {
+		int type = event->type;
+		if (type == EV_ABS) {
+			float value = event->value;
+			if (event->code == EVENT_TYPE_ACCEL_X) {
+				mPendingEvent.acceleration.x = ACC_UNIT_CONVERSION(value);
+			} else if (event->code == EVENT_TYPE_ACCEL_Y) {
+				mPendingEvent.acceleration.y = ACC_UNIT_CONVERSION(value);
+			} else if (event->code == EVENT_TYPE_ACCEL_Z) {
+				mPendingEvent.acceleration.z = ACC_UNIT_CONVERSION(value);
+			}
+		} else if (type == EV_SYN) {
+			mPendingEvent.timestamp = timevalToNano(event->time);
+			if (mEnabled) {
+				*data++ = mPendingEvent;
+				count--;
+				numEventReceived++;
+			}
+		} else {
+			ALOGE("BuddyHALGSensor: unknown event (type=%d, code=%d)",
+					type, event->code);
+		}
+        mInputReader.next();
+    }
+
+    return numEventReceived;
+}
+int AccSensor::populateSensorList(struct sensor_t *list)
+{
+	ALOGE("BuddyGAL populateSensorList\n");
+	memcpy(list, sSensorList, sizeof(struct sensor_t) * numSensors);
+	return numSensors;
+}
+

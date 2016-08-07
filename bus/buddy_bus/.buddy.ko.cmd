@@ -1,0 +1,1 @@
+cmd_/home/buddy/buddy_tmp/project/device/bus/buddy_bus/buddy.ko := ld -r -m elf_i386 -T /usr/src/linux-headers-3.13.0-40-generic/scripts/module-common.lds --build-id  -o /home/buddy/buddy_tmp/project/device/bus/buddy_bus/buddy.ko /home/buddy/buddy_tmp/project/device/bus/buddy_bus/buddy.o /home/buddy/buddy_tmp/project/device/bus/buddy_bus/buddy.mod.o
